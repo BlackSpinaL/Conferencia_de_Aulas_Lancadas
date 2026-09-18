@@ -28,10 +28,9 @@ DIAS_SEMANA = ['2ª Feira', '3ª Feira', '4ª Feira', '5ª Feira', '6ª Feira', 
 
 
 # ============================================================
-# EXTRAÇÃO DE DATAS
+# EXTRAÇÃO DE DATAS (PLANILHA)
 # ============================================================
 def _extrair_datas_celula(valor, mes_num=None, ano=2026):
-    """Extrai lista de datas de uma célula."""
     if valor is None:
         return []
     if isinstance(valor, datetime):
@@ -43,14 +42,12 @@ def _extrair_datas_celula(valor, mes_num=None, ano=2026):
     if not texto or texto.upper() in ('NAN', 'NONE', 'NAT'):
         return []
 
-    # 1) ISO: "2026-03-07 00:00:00"
     if re.match(r'^\d{4}-\d{2}-\d{2}', texto):
         try:
             return [datetime.strptime(texto[:10], '%Y-%m-%d').date()]
         except ValueError:
             pass
 
-    # 2) dd/mm/aaaa ou dd-mm-aaaa
     m = re.match(r'^(\d{1,2})[/\.\-](\d{1,2})[/\.\-](\d{2,4})', texto)
     if m:
         dia, mes, ano_str = int(m.group(1)), int(m.group(2)), m.group(3)
@@ -60,7 +57,6 @@ def _extrair_datas_celula(valor, mes_num=None, ano=2026):
         except ValueError:
             return []
 
-    # 3) dd/mmm (abreviado): "07/mar", "30/mai", "26/set"
     m = re.match(r'^(\d{1,2})\s*[/\-\.]\s*([a-zA-ZçÇ]{3})', texto)
     if m:
         dia = int(m.group(1))
@@ -71,7 +67,6 @@ def _extrair_datas_celula(valor, mes_num=None, ano=2026):
             except ValueError:
                 return []
 
-    # 4) Dias soltos: "9.23", "04, 11,25"
     if mes_num is None:
         return []
     numeros = re.findall(r'\d+', texto)
@@ -88,9 +83,7 @@ def _extrair_datas_celula(valor, mes_num=None, ano=2026):
 # PARSER — DISTRIBUIÇÃO DE DIAS LETIVOS
 # ============================================================
 def parse_distribuicao(arquivo_excel, ano=2026):
-    """Lê a planilha e retorna {etapa: {dia_semana: [datas]}}."""
     df = pd.read_excel(arquivo_excel, header=None, dtype=object)
-
     etapas = {}
     etapa_atual = None
     col_dias = {}
@@ -100,20 +93,16 @@ def parse_distribuicao(arquivo_excel, ano=2026):
         if not any(cells):
             continue
 
-        # ---- Cabeçalho de dias da semana ----
         if any('Feira' in c for c in cells):
             novo = {}
             for i, c in enumerate(cells):
                 m = re.match(r'^(\d)\s*[ºª]?\s*Feira', c, re.IGNORECASE)
-                if m:
-                    num = m.group(1)
-                    if num in '23456':
-                        novo[f'{num}ª Feira'] = i
+                if m and m.group(1) in '23456':
+                    novo[f'{m.group(1)}ª Feira'] = i
             if novo:
                 col_dias = novo
             continue
 
-        # ---- Etapa: "1ª ETAPA", "2ª Etapa" etc ----
         etapa_encontrada = None
         for c in cells:
             m = re.match(r'^\s*(\d)\s*[ªA]?\s*ETAPA\s*$', c, re.IGNORECASE)
@@ -130,7 +119,6 @@ def parse_distribuicao(arquivo_excel, ano=2026):
         if etapa_atual is None:
             continue
 
-        # ---- Mês ----
         mes_encontrado = None
         for c in cells:
             if c in MESES:
@@ -139,7 +127,6 @@ def parse_distribuicao(arquivo_excel, ano=2026):
 
         if mes_encontrado:
             mes_num = MESES[mes_encontrado]
-            # Se por algum motivo col_dias ainda não foi detectado, usa padrão C..G
             if not col_dias:
                 col_dias = {'2ª Feira': 2, '3ª Feira': 3, '4ª Feira': 4,
                             '5ª Feira': 5, '6ª Feira': 6}
@@ -151,7 +138,6 @@ def parse_distribuicao(arquivo_excel, ano=2026):
                         etapas[etapa_atual][dia_sem].extend(datas)
             continue
 
-        # ---- Sábado ----
         for i, c in enumerate(cells):
             if c in ('Sábado', 'Sabado'):
                 for j in range(i + 1, len(row)):
@@ -161,71 +147,104 @@ def parse_distribuicao(arquivo_excel, ano=2026):
                         etapas[etapa_atual]['Sábado'].extend(datas)
                 break
 
-    # Remove duplicatas e ordena
     for et in etapas:
         for d in etapas[et]:
             etapas[et][d] = sorted(set(etapas[et][d]))
-
     return etapas
 
 
 # ============================================================
-# PARSER — DIÁRIO EM PDF
+# PARSER DO DIÁRIO — HÍBRIDO
 # ============================================================
-def parse_diario_pdf(arquivo_pdf, ano_padrao=2026):
+def _parse_diario_por_texto(pdf, ano_padrao):
     registros = []
+    for page in pdf.pages:
+        texto = page.extract_text() or ''
+        for linha in texto.split('\n'):
+            linha = linha.strip()
+            if not linha:
+                continue
+            m = re.match(r'^(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\s+(\d+)\s+(.+)$', linha)
+            if m:
+                dia, mes = int(m.group(1)), int(m.group(2))
+                ano_str = m.group(3)
+                aulas = int(m.group(4))
+                conteudo = m.group(5).strip()
+                ano = int(ano_str) if ano_str and len(ano_str) == 4 else (
+                    2000 + int(ano_str) if ano_str else ano_padrao
+                )
+                try:
+                    registros.append({'data': date(ano, mes, dia), 'aulas': aulas, 'conteudo': conteudo})
+                except ValueError:
+                    continue
+    return registros
+
+
+def _parse_diario_por_tabela(pdf, ano_padrao):
+    registros = []
+    for page in pdf.pages:
+        for tabela in page.extract_tables():
+            if not tabela or len(tabela) < 2:
+                continue
+            col_dia = col_aulas = col_conteudo = None
+            for header_row in tabela[:3]:
+                for i, c in enumerate(header_row):
+                    if c is None:
+                        continue
+                    h = str(c).strip().upper()
+                    if 'DIA/MÊS' in h or 'DIA/MES' in h:
+                        col_dia = i
+                    elif h.startswith('AULAS') or h == 'AULAS':
+                        col_aulas = i
+                    elif 'SÍNTESE' in h or 'SINTESE' in h:
+                        col_conteudo = i
+            if col_dia is None or col_aulas is None:
+                continue
+            for linha in tabela[1:]:
+                if not linha or len(linha) <= max(col_dia, col_aulas):
+                    continue
+                v_dia, v_aulas = linha[col_dia], linha[col_aulas]
+                if v_dia is None or v_aulas is None:
+                    continue
+                m = re.match(r'^(\d{1,2})[/\.\-](\d{1,2})(?:[/\.\-](\d{2,4}))?', str(v_dia).strip())
+                if not m:
+                    continue
+                dia, mes = int(m.group(1)), int(m.group(2))
+                ano_str = m.group(3)
+                ano = int(ano_str) if ano_str and len(ano_str) == 4 else (
+                    2000 + int(ano_str) if ano_str else ano_padrao
+                )
+                try:
+                    dt = date(ano, mes, dia)
+                except ValueError:
+                    continue
+                digitos = re.sub(r'\D', '', str(v_aulas))
+                if not digitos:
+                    continue
+                conteudo = ''
+                if col_conteudo is not None and col_conteudo < len(linha):
+                    conteudo = str(linha[col_conteudo] or '').replace('\n', ' ').strip()
+                registros.append({'data': dt, 'aulas': int(digitos), 'conteudo': conteudo})
+    return registros
+
+
+def parse_diario_pdf(arquivo_pdf, ano_padrao=2026, debug=False):
     with pdfplumber.open(arquivo_pdf) as pdf:
-        for page in pdf.pages:
-            for tabela in page.extract_tables():
-                if not tabela or len(tabela) < 2:
-                    continue
+        regs_texto = _parse_diario_por_texto(pdf, ano_padrao)
+    with pdfplumber.open(arquivo_pdf) as pdf:
+        regs_tabela = _parse_diario_por_tabela(pdf, ano_padrao)
 
-                col_dia = col_aulas = col_conteudo = None
-                for header_row in tabela[:3]:
-                    for i, c in enumerate(header_row):
-                        if c is None:
-                            continue
-                        h = str(c).strip().upper()
-                        if 'DIA/MÊS' in h or 'DIA/MES' in h or h == 'MÊS':
-                            col_dia = i
-                        elif h.startswith('AULAS') or h == 'AULAS':
-                            col_aulas = i
-                        elif 'SÍNTESE' in h or 'SINTESE' in h:
-                            col_conteudo = i
+    if len(regs_texto) >= len(regs_tabela):
+        regs, metodo = regs_texto, 'texto'
+    else:
+        regs, metodo = regs_tabela, 'tabela'
 
-                if col_dia is None or col_aulas is None:
-                    continue
-
-                for linha in tabela[1:]:
-                    if not linha or len(linha) <= max(col_dia, col_aulas):
-                        continue
-                    v_dia, v_aulas = linha[col_dia], linha[col_aulas]
-                    if v_dia is None or v_aulas is None:
-                        continue
-                    texto_dia = str(v_dia).strip()
-                    m = re.match(r'^(\d{1,2})[/\.\-](\d{1,2})(?:[/\.\-](\d{2,4}))?', texto_dia)
-                    if not m:
-                        continue
-                    dia, mes = int(m.group(1)), int(m.group(2))
-                    ano_str = m.group(3)
-                    ano = int(ano_str) if ano_str and len(ano_str) == 4 else (
-                        2000 + int(ano_str) if ano_str else ano_padrao
-                    )
-                    try:
-                        dt = date(ano, mes, dia)
-                    except ValueError:
-                        continue
-                    digitos = re.sub(r'\D', '', str(v_aulas))
-                    if not digitos:
-                        continue
-                    conteudo = ''
-                    if col_conteudo is not None and col_conteudo < len(linha):
-                        conteudo = str(linha[col_conteudo] or '').replace('\n', ' ').strip()
-                    registros.append({'data': dt, 'aulas': int(digitos), 'conteudo': conteudo})
-
-    df = pd.DataFrame(registros)
+    df = pd.DataFrame(regs)
     if not df.empty:
-        df = df.groupby('data', as_index=False).agg({'aulas': 'max', 'conteudo': 'first'})
+        df = df.sort_values('aulas', ascending=False).drop_duplicates(subset=['data']).sort_values('data').reset_index(drop=True)
+
+    if debug:
+        return df, metodo, len(regs_texto), len(regs_tabela)
     return df
 
 
@@ -289,7 +308,7 @@ def conferir(etapas, etapa, aulas_por_dia, df_diario):
 # INTERFACE
 # ============================================================
 st.title("📚 Sistema de Conferência de Aulas — CTPM Lavras")
-st.caption("Faça o upload dos arquivos, informe as aulas por dia e clique em RODAR.")
+st.caption("Faça o upload dos arquivos, preencha a tabela de aulas e clique em RODAR.")
 
 with st.sidebar:
     st.header("📂 Arquivos")
@@ -301,7 +320,7 @@ if not arquivo_dist or not arquivo_diario:
     st.info("⬅️ Faça o upload dos dois arquivos (planilha + diário) na barra lateral para começar.")
     st.stop()
 
-# Lê planilha
+# --- Planilha ---
 try:
     etapas = parse_distribuicao(arquivo_dist, ano=ano_letivo)
 except Exception as e:
@@ -309,70 +328,118 @@ except Exception as e:
     st.stop()
 
 if not etapas:
-    st.error("⚠️ Não foi possível encontrar as etapas no arquivo de distribuição.")
-    with st.expander("🔍 Ver as 30 primeiras linhas da planilha (diagnóstico)", expanded=True):
-        df_debug = pd.read_excel(arquivo_dist, header=None)
-        st.dataframe(df_debug.head(30))
+    st.error("⚠️ Não foi possível encontrar as etapas na planilha.")
+    with st.expander("🔍 Ver as 30 primeiras linhas", expanded=True):
+        st.dataframe(pd.read_excel(arquivo_dist, header=None).head(30))
     st.stop()
 
-# Lê diário
+# --- Diário ---
 try:
-    df_diario = parse_diario_pdf(arquivo_diario, ano_padrao=ano_letivo)
+    df_diario, metodo, n_texto, n_tabela = parse_diario_pdf(
+        arquivo_diario, ano_padrao=ano_letivo, debug=True
+    )
 except Exception as e:
     st.error(f"Erro ao ler o diário: {e}")
     st.stop()
 
 st.success(f"✔ Planilha carregada — etapas encontradas: {', '.join(etapas.keys())}")
-st.success(f"✔ Diário lido — {len(df_diario)} lançamento(s) encontrado(s)")
+st.success(f"✔ Diário lido — **{len(df_diario)} lançamento(s)** encontrado(s)")
 
-# Debug: mostra o que foi extraído da planilha
-with st.expander("🔍 Ver o que foi extraído da planilha (conferência)"):
-    for et_nome, et_dados in etapas.items():
-        st.markdown(f"**{et_nome}**")
-        linhas = []
-        for dia_sem, datas in et_dados.items():
-            linhas.append({
-                'Dia': dia_sem,
-                'Qtd': len(datas),
-                'Datas': ', '.join(d.strftime('%d/%m') for d in datas) if datas else '—'
-            })
-        st.dataframe(pd.DataFrame(linhas), use_container_width=True, hide_index=True)
+with st.expander("🔬 Diagnóstico do parser do diário"):
+    st.write(f"- Método usado: **{metodo}**")
+    st.write(f"- Lançamentos via texto: **{n_texto}**")
+    st.write(f"- Lançamentos via tabela: **{n_tabela}**")
+    if not df_diario.empty:
+        df_dbg = df_diario.copy()
+        df_dbg['data'] = pd.to_datetime(df_dbg['data']).dt.strftime('%d/%m/%Y')
+        st.dataframe(df_dbg, use_container_width=True, hide_index=True)
 
-# Seleção de etapa
+# --- Seleção de etapa ---
 etapa = st.selectbox("📌 Etapa", list(etapas.keys()))
 
-st.subheader("⚙️ Aulas por dia da semana")
-st.caption("Ajuste conforme a turma/disciplina. Depois clique em RODAR CONFERÊNCIA.")
+# ============================================================
+# TABELA EDITÁVEL ESTILO "PASTA1"
+# ============================================================
+st.subheader("⚙️ Distribuição de aulas — estilo Pasta1")
+st.caption(
+    "Edite **apenas** a coluna **'Nº de aulas no dia'**. As colunas "
+    "**'Total de dias da semana na etapa'** e **'Total de aulas'** são "
+    "calculadas automaticamente a partir da etapa selecionada acima."
+)
 
+# Valores padrão (usados na primeira renderização)
 default_aulas = {'2ª Feira': 2, '3ª Feira': 1, '4ª Feira': 1,
                  '5ª Feira': 1, '6ª Feira': 1, 'Sábado': 0}
 
-aulas_por_dia = {}
-colunas = st.columns(len(DIAS_SEMANA))
-for i, dia_sem in enumerate(DIAS_SEMANA):
-    with colunas[i]:
-        aulas_por_dia[dia_sem] = st.number_input(
-            dia_sem, min_value=0, max_value=10,
-            value=default_aulas[dia_sem], step=1, key=f"aulas_{dia_sem}"
-        )
+# Monta o DataFrame inicial
+linhas = []
+for dia_sem in DIAS_SEMANA:
+    total_dias = len(etapas[etapa][dia_sem])
+    n = default_aulas[dia_sem]
+    linhas.append({
+        'Dias da semana': dia_sem,
+        'Nº de aulas no dia': n,
+        'Total de dias da semana na etapa': total_dias,
+        'Total de aulas': total_dias * n,
+    })
 
-# --------- BOTÃO PRINCIPAL ---------
+df_edit_input = pd.DataFrame(linhas)
+
+# Editor
+edited = st.data_editor(
+    df_edit_input,
+    column_config={
+        'Dias da semana': st.column_config.TextColumn(
+            'Dias da semana', disabled=True, width='medium'
+        ),
+        'Nº de aulas no dia': st.column_config.NumberColumn(
+            'Nº de aulas no dia', min_value=0, max_value=20, step=1, width='small'
+        ),
+        'Total de dias da semana na etapa': st.column_config.NumberColumn(
+            'Total de dias da semana na etapa', disabled=True, width='medium'
+        ),
+        'Total de aulas': st.column_config.NumberColumn(
+            'Total de aulas', disabled=True, width='small'
+        ),
+    },
+    hide_index=True,
+    use_container_width=True,
+    key=f'editor_aulas_{etapa}_{ano_letivo}',
+)
+
+# Recalcula o total a partir dos valores atuais do editor
+df_edit_input['Nº de aulas no dia'] = edited['Nº de aulas no dia'].fillna(0).astype(int)
+df_edit_input['Total de aulas'] = (
+    df_edit_input['Nº de aulas no dia'] * df_edit_input['Total de dias da semana na etapa']
+)
+
+total_geral = int(df_edit_input['Total de aulas'].sum())
+
+# Mostra o resumo com totais atualizados
+st.markdown("**Resumo (atualizado a cada edição):**")
+st.dataframe(df_edit_input, hide_index=True, use_container_width=True)
+
+st.markdown(
+    f"<h3 style='text-align:center; color:#1f77b4;'>Total de aulas na {etapa}: "
+    f"<b>{total_geral}</b></h3>",
+    unsafe_allow_html=True
+)
+
+# Aulas por dia (dict) para a conferência
+aulas_por_dia = dict(zip(df_edit_input['Dias da semana'], df_edit_input['Nº de aulas no dia']))
+
+# ============================================================
+# BOTÃO RODAR
+# ============================================================
 if st.button("▶️ RODAR CONFERÊNCIA", type="primary", use_container_width=True):
     resultado = conferir(etapas, etapa, aulas_por_dia, df_diario)
     if resultado is None:
-        st.warning("Nenhum dia letivo encontrado para essa etapa com as aulas informadas.")
+        st.warning("Nenhum dia letivo encontrado para essa etapa.")
         st.stop()
 
     st.markdown("---")
-    st.subheader("📊 Tabela de referência (estilo Pasta1)")
-    df_p1 = resultado['df_pasta1'].copy()
-    total_row = pd.DataFrame([{
-        'Dias da semana': 'TOTAL', 'Nº de aulas no dia': '',
-        'Total de dias da semana na etapa': df_p1['Total de dias da semana na etapa'].sum(),
-        'Total de aulas': df_p1['Total de aulas'].sum()
-    }])
-    st.dataframe(pd.concat([df_p1, total_row], ignore_index=True),
-                 use_container_width=True, hide_index=True)
+    st.subheader("📊 Tabela de referência")
+    st.dataframe(resultado['df_pasta1'], use_container_width=True, hide_index=True)
 
     st.markdown("---")
     c1, c2, c3 = st.columns(3)
