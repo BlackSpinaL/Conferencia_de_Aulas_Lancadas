@@ -612,11 +612,6 @@ with st.sidebar:
         help="Diário da disciplina/turma que será conferido.",
     )
 
-    arquivo_calendario = st.file_uploader(
-        "Calendário escolar (.pdf)",
-        type=["pdf"],
-        help="Calendário anual da escola. É usado como referência do ano letivo.",
-    )
 
     ano_letivo = st.number_input(
         "Ano letivo",
@@ -626,10 +621,10 @@ with st.sidebar:
         step=1,
     )
 
-if not arquivo_dist or not arquivo_diario or not arquivo_calendario:
+if not arquivo_dist or not arquivo_diario:
     st.info(
-        "👈 Envie os três arquivos: distribuição de dias letivos, "
-        "diário escolar e calendário escolar."
+        "👈 Envie os dois arquivos: distribuição de dias letivos e "
+        "diário escolar."
     )
 
     st.markdown(
@@ -754,36 +749,30 @@ etapa = st.selectbox(
 )
 
 # ============================================================
-# TABELA DE AULAS POR DIA DA SEMANA
+# TABELA DE AULAS DA DISCIPLINA - MODELO PASTA 1
 # ============================================================
-st.subheader("📝 Número de aulas por dia da semana")
+st.subheader("📝 Distribuição de aulas da disciplina")
 
 st.caption(
-    "Digite quantas aulas a disciplina possui em cada dia. "
-    "O total de dias letivos vem automaticamente da planilha "
-    "de distribuição."
+    "O campo **Nº de aulas no dia** é preenchido por você. "
+    "A quantidade de dias letivos é puxada automaticamente da "
+    "planilha de Distribuição de Dias Letivos."
 )
 
 chave_editor = f"config_aulas_{etapa}_{ano_letivo}"
 
 if chave_editor not in st.session_state:
     linhas = []
-
     for dia in DIAS_SEMANA:
+        qtd_dias = len(etapas[etapa].get(dia, []))
         linhas.append(
             {
                 "Dias da semana": dia,
                 "Nº de aulas no dia": PADRAO_AULAS[dia],
-                "Total de dias na etapa": len(
-                    etapas[etapa].get(dia, [])
-                ),
-                "Total de aulas previstas": (
-                    PADRAO_AULAS[dia]
-                    * len(etapas[etapa].get(dia, []))
-                ),
+                "Total de dias da semana na etapa": qtd_dias,
+                "Total de aulas": PADRAO_AULAS[dia] * qtd_dias,
             }
         )
-
     st.session_state[chave_editor] = pd.DataFrame(linhas)
 
 df_config = st.data_editor(
@@ -794,79 +783,70 @@ df_config = st.data_editor(
     key=f"editor_{chave_editor}",
     column_config={
         "Dias da semana": st.column_config.TextColumn(
-            "Dias da semana",
-            disabled=True,
+            "Dias da semana", disabled=True, width="medium"
         ),
         "Nº de aulas no dia": st.column_config.NumberColumn(
             "Nº de aulas no dia",
             min_value=0,
             max_value=20,
             step=1,
-            help="Digite a quantidade de aulas da disciplina nesse dia.",
+            width="small",
+            help="✏️ Informe quantas aulas dessa disciplina são dadas nesse dia.",
         ),
-        "Total de dias na etapa": st.column_config.NumberColumn(
-            "Total de dias na etapa",
+        "Total de dias da semana na etapa": st.column_config.NumberColumn(
+            "Total de dias da semana na etapa",
             disabled=True,
-            help="Vem automaticamente da planilha de distribuição.",
+            width="large",
+            help="🔒 Vem automaticamente da planilha de distribuição.",
         ),
-        "Total de aulas previstas": st.column_config.NumberColumn(
-            "Total de aulas previstas",
+        "Total de aulas": st.column_config.NumberColumn(
+            "Total de aulas",
             disabled=True,
+            width="small",
+            help="🔒 Nº de aulas no dia × total de dias da semana.",
         ),
     },
 )
 
-# Recalcula sempre
 df_config["Nº de aulas no dia"] = (
-    pd.to_numeric(
-        df_config["Nº de aulas no dia"],
-        errors="coerce",
-    )
-    .fillna(0)
-    .astype(int)
+    pd.to_numeric(df_config["Nº de aulas no dia"], errors="coerce")
+    .fillna(0).astype(int)
 )
-
-df_config["Total de dias na etapa"] = (
+df_config["Total de dias da semana na etapa"] = (
     pd.to_numeric(
-        df_config["Total de dias na etapa"],
-        errors="coerce",
-    )
-    .fillna(0)
-    .astype(int)
+        df_config["Total de dias da semana na etapa"], errors="coerce"
+    ).fillna(0).astype(int)
 )
-
-df_config["Total de aulas previstas"] = (
+df_config["Total de aulas"] = (
     df_config["Nº de aulas no dia"]
-    * df_config["Total de dias na etapa"]
+    * df_config["Total de dias da semana na etapa"]
 )
 
 st.session_state[chave_editor] = df_config
 
-total_dias = int(
-    df_config["Total de dias na etapa"].sum()
-)
+total_dias = int(df_config["Total de dias da semana na etapa"].sum())
+total_aulas = int(df_config["Total de aulas"].sum())
 
-total_previsto = int(
-    df_config["Total de aulas previstas"].sum()
+df_total = pd.DataFrame([{
+    "Dias da semana": "TOTAL",
+    "Nº de aulas no dia": "",
+    "Total de dias da semana na etapa": total_dias,
+    "Total de aulas": total_aulas,
+}])
+
+st.markdown("### 📊 Resumo da etapa")
+m1, m2 = st.columns(2)
+m1.metric("Total de dias letivos da etapa", total_dias)
+m2.metric("Total de aulas da disciplina", total_aulas)
+
+st.dataframe(
+    pd.concat([df_config, df_total], ignore_index=True),
+    use_container_width=True,
+    hide_index=True,
 )
 
 aulas_por_dia = dict(
-    zip(
-        df_config["Dias da semana"],
-        df_config["Nº de aulas no dia"],
-    )
-)
-
-t1, t2 = st.columns(2)
-
-t1.metric(
-    "Total de dias letivos da etapa",
-    total_dias,
-)
-
-t2.metric(
-    "Total de aulas previstas",
-    total_previsto,
+    zip(df_config["Dias da semana"], df_config["Nº de aulas no dia"])
 )
 
 # ============================================================
@@ -905,47 +885,6 @@ with st.expander("📅 Ver todos os dias letivos considerados"):
             df_datas,
             use_container_width=True,
             hide_index=True,
-        )
-
-
-# ============================================================
-# CALENDÁRIO
-# ============================================================
-with st.expander("🗓️ Calendário escolar carregado"):
-    st.success(
-        "Calendário escolar anexado com sucesso e associado "
-        "ao ano da conferência."
-    )
-    st.caption(
-        "A lista de dias letivos utilizada no cálculo vem da "
-        "planilha de distribuição. O calendário permanece como "
-        "documento de referência para conferência."
-    )
-
-    try:
-        arquivo_calendario.seek(0)
-
-        with pdfplumber.open(arquivo_calendario) as pdf:
-            texto_calendario = "\n".join(
-                page.extract_text() or ""
-                for page in pdf.pages
-            )
-
-        if texto_calendario.strip():
-            st.text_area(
-                "Texto extraído do calendário",
-                texto_calendario[:10000],
-                height=250,
-            )
-        else:
-            st.info(
-                "O PDF não disponibilizou texto para extração. "
-                "O arquivo continua anexado à conferência."
-            )
-
-    except Exception as e:
-        st.warning(
-            f"Não foi possível extrair texto do calendário: {e}"
         )
 
 
