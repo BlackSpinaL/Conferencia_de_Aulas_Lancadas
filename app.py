@@ -122,7 +122,7 @@ def parse_distribuicao(arquivo_excel, ano):
         if not any(cells):
             continue
 
-        # marcador explícito
+        # marcador explícito de etapa
         etapa_explicita = None
         for c in cells:
             m = re.search(r"\b([123])\s*[ªº°]?\s*etapa\b", c, re.IGNORECASE)
@@ -398,131 +398,133 @@ indice = etapas_disponiveis.index(etapa_padrao) if etapa_padrao in etapas_dispon
 etapa = st.selectbox("Etapa que será conferida", etapas_disponiveis, index=indice)
 
 # ============================================================
-# 📝 MENU DE AULAS POR DIA (parte que o usuário não estava vendo)
+# 📝 MENU DE AULAS POR DIA — modelo Pasta1.xlsx
 # ============================================================
 st.subheader("📝 Distribuição de aulas da disciplina")
-st.info(
-    "**Preencha a coluna `Nº de aulas no dia`** (clique na célula e digite). "
-    "A quantidade de dias letivos é puxada automaticamente da planilha de "
-    "Distribuição de Dias Letivos. A coluna `Total de aulas` é recalculada "
-    "automaticamente."
+st.caption(
+    "Modelo da **Pasta1.xlsx**: informe quantas aulas desta disciplina "
+    "acontecem em cada dia da semana. "
+    "Os totais de dias vêm automaticamente da planilha de Distribuição."
 )
 
 fid = _file_id(arquivo_dist)
-chave_editor = f"config_{etapa}_{ano_letivo}_{fid}"
 
-# Sempre recria se os dias mudaram (evita cache de outra etapa)
-sinal_versao = f"{chave_editor}_v"
-versao_atual = tuple(len(etapas[etapa].get(d, [])) for d in DIAS_SEMANA)
+# ---------- cabeçalho da tabela ----------
+h0, h1, h2, h3 = st.columns([2, 2, 2, 2])
+h0.markdown("**Dias da semana**")
+h1.markdown("**Nº de aulas no dia**")
+h2.markdown("**Total de dias na etapa**")
+h3.markdown("**Total de aulas**")
 
-if (chave_editor not in st.session_state
-        or st.session_state.get(sinal_versao) != versao_atual):
-    linhas = []
-    for dia in DIAS_SEMANA:
-        qtd_dias = len(etapas[etapa].get(dia, []))
-        linhas.append({
-            "Dias da semana": dia,
-            "Nº de aulas no dia": PADRAO_AULAS[dia],
-            "Total de dias na etapa": qtd_dias,
-        })
-    st.session_state[chave_editor] = pd.DataFrame(linhas)
-    st.session_state[sinal_versao] = versao_atual
+# ---------- linhas ----------
+aulas_por_dia = {}
+total_dias_etapa = 0
+total_dias_com_aulas = 0
+total_aulas = 0
 
-df_config = st.data_editor(
-    st.session_state[chave_editor],
-    hide_index=True,
-    use_container_width=True,
-    num_rows="fixed",
-    key=f"editor_{chave_editor}",
-    column_config={
-        "Dias da semana": st.column_config.TextColumn(
-            "Dias da semana", disabled=True, width="medium"),
-        "Nº de aulas no dia": st.column_config.NumberColumn(
-            "✏️ Nº de aulas no dia", min_value=0, max_value=20,
-            step=1, width="small",
-            help="Clique na célula e digite quantas aulas desta disciplina "
-                 "acontecem neste dia da semana."),
-        "Total de dias na etapa": st.column_config.NumberColumn(
-            "🔒 Total de dias na etapa", disabled=True, width="medium",
-            help="Vem automaticamente da planilha de Distribuição."),
-    },
-)
+for dia in DIAS_SEMANA:
+    qtd_dias = len(etapas[etapa].get(dia, []))
 
-# normaliza
-df_config["Nº de aulas no dia"] = (
-    pd.to_numeric(df_config["Nº de aulas no dia"], errors="coerce")
-      .fillna(0).astype(int))
-df_config["Total de dias na etapa"] = (
-    pd.to_numeric(df_config["Total de dias na etapa"], errors="coerce")
-      .fillna(0).astype(int))
-df_config["Total de aulas"] = (
-    df_config["Nº de aulas no dia"] * df_config["Total de dias na etapa"])
-st.session_state[chave_editor] = df_config
+    c0, c1, c2, c3 = st.columns([2, 2, 2, 2])
+    c0.markdown(f"**{dia}**")
 
-# ---- totais (agora com DOIS números) ----
-total_dias_etapa = int(df_config["Total de dias na etapa"].sum())
-total_dias_com_aulas = int(
-    df_config.loc[df_config["Nº de aulas no dia"] > 0,
-                  "Total de dias na etapa"].sum())
-total_aulas = int(df_config["Total de aulas"].sum())
+    aulas = c1.number_input(
+        label=f"aulas_{dia}",
+        min_value=0,
+        max_value=20,
+        value=int(PADRAO_AULAS[dia]),
+        step=1,
+        key=f"ni_{etapa}_{dia}_{fid}_{ano_letivo}",
+        label_visibility="collapsed",
+    )
 
+    subtotal = aulas * qtd_dias
+    c2.markdown(f"<div style='padding-top:6px'>{qtd_dias}</div>",
+                unsafe_allow_html=True)
+    c3.markdown(f"<div style='padding-top:6px'><b>{subtotal}</b></div>",
+                unsafe_allow_html=True)
+
+    aulas_por_dia[dia] = aulas
+    total_dias_etapa += qtd_dias
+    if aulas > 0:
+        total_dias_com_aulas += qtd_dias
+    total_aulas += subtotal
+
+# ---------- linha TOTAL ----------
+st.markdown("---")
+t0, t1, t2, t3 = st.columns([2, 2, 2, 2])
+t0.markdown("**TOTAL**")
+t1.markdown("")
+t2.markdown(f"**{total_dias_etapa}**")
+t3.markdown(f"**{total_aulas}**")
+
+# ---------- resumo (Pasta1.xlsx layout) ----------
 st.markdown("### 📊 Resumo da etapa")
-m1, m2, m3 = st.columns(3)
-m1.metric("📅 Total de dias na etapa", total_dias_etapa,
-          help="Todos os dias listados na planilha (inclui os com 0 aulas).")
-m2.metric("🎯 Dias com aulas programadas", total_dias_com_aulas,
-          help="Só os dias em que você definiu Nº de aulas > 0.")
-m3.metric("📚 Total de aulas da disciplina", total_aulas)
 
-# tabela final com TOTAL
-df_total = pd.DataFrame([{
+resumo_df = pd.DataFrame([
+    {
+        "Dias da semana": dia,
+        "Nº de aulas no dia": aulas_por_dia[dia],
+        "Total de dias da semana na etapa": len(etapas[etapa].get(dia, [])),
+        "Total de aulas": aulas_por_dia[dia] * len(etapas[etapa].get(dia, [])),
+    }
+    for dia in DIAS_SEMANA
+] + [{
     "Dias da semana": "TOTAL",
     "Nº de aulas no dia": "",
-    "Total de dias na etapa": total_dias_etapa,
+    "Total de dias da semana na etapa": total_dias_etapa,
     "Total de aulas": total_aulas,
 }])
-st.dataframe(
-    pd.concat([df_config[["Dias da semana", "Nº de aulas no dia",
-                          "Total de dias na etapa", "Total de aulas"]],
-               df_total], ignore_index=True),
-    use_container_width=True, hide_index=True,
+
+st.dataframe(resumo_df, use_container_width=True, hide_index=True)
+
+# ---------- métricas destacadas ----------
+m1, m2, m3 = st.columns(3)
+m1.metric(
+    "📅 Total de dias na etapa",
+    total_dias_etapa,
+    help="Todos os dias cadastrados na planilha (mesmo com 0 aulas).",
+)
+m2.metric(
+    "🎯 Dias com aulas programadas",
+    total_dias_com_aulas,
+    help="Só os dias em que você definiu Nº de aulas > 0.",
+)
+m3.metric(
+    "📚 Total de aulas da disciplina",
+    total_aulas,
+    help="Somatório de (Nº de aulas × total de dias de cada dia da semana).",
 )
 
-aulas_por_dia = dict(zip(df_config["Dias da semana"],
-                          df_config["Nº de aulas no dia"]))
+# ---------- aviso explicativo sobre sábados ----------
+sabs = etapas[etapa].get("Sábado", [])
+if sabs:
+    with st.expander(
+        f"🗓️ Sábados letivos desta etapa ({len(sabs)} data(s)) — clique para ver"
+    ):
+        df_sab = pd.DataFrame({
+            "Data": [d.strftime("%d/%m/%Y") for d in sabs],
+            "Dia da semana": ["Sábado"] * len(sabs),
+            "Aulas configuradas": [aulas_por_dia.get("Sábado", 0)] * len(sabs),
+        })
+        st.dataframe(df_sab, use_container_width=True, hide_index=True)
+        st.caption(
+            "ℹ️ Sábado é uma **data pontual** (não semanal), por isso aparece "
+            "com a data específica. Se quiser contá-lo, basta digitar um número "
+            "> 0 no campo **Nº de aulas no dia** da linha Sábado acima."
+        )
 
-# ---- Mostra claramente quais são os dias de Sábado ----
+# ---------- lista completa de datas consideradas ----------
 with st.expander("📅 Ver todos os dias letivos considerados"):
     df_datas = montar_dias_esperados(etapas, etapa, aulas_por_dia)
     if df_datas.empty:
-        st.warning("Nenhuma data encontrada.")
+        st.warning("Nenhuma data encontrada com aulas > 0.")
     else:
         df_datas = df_datas.copy()
         df_datas["Data"] = pd.to_datetime(df_datas["data"]).dt.strftime("%d/%m/%Y")
         df_datas = df_datas[["Data", "dia_semana", "aulas_esperadas"]]
         df_datas.columns = ["Data", "Dia da semana", "Aulas esperadas"]
         st.dataframe(df_datas, use_container_width=True, hide_index=True)
-
-# ---- Bloco separado só para Sábados (esclarecimento) ----
-with st.expander("🗓️ Datas de Sábado letivo desta etapa"):
-    sabs = etapas[etapa].get("Sábado", [])
-    if not sabs:
-        st.info("Nenhum sábado letivo cadastrado nesta etapa.")
-    else:
-        df_sab = pd.DataFrame({
-            "Data": [d.strftime("%d/%m/%Y") for d in sabs],
-            "Dia da semana": ["Sábado"] * len(sabs),
-            "Aulas configuradas": [aulas_por_dia.get("Sábado", 0)] * len(sabs),
-        })
-        df_sab["Aulas no dia"] = df_sab["Aulas configuradas"]
-        st.dataframe(df_sab[["Data", "Dia da semana", "Aulas no dia"]],
-                     use_container_width=True, hide_index=True)
-        st.caption(
-            "ℹ️ Sábados são **datas pontuais**, por isso aparecem com data "
-            "específica (ex.: 30/05, 11/07) em vez de uma contagem semanal. "
-            "Se você quer que contem como aulas, defina um número > 0 na "
-            "linha **Sábado** da tabela acima."
-        )
 
 # ============================================================
 # CONFERÊNCIA
