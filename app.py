@@ -28,10 +28,8 @@ COLUNAS_DIAS = {
     "5ª Feira": 5, "6ª Feira": 6,
 }
 
-PADRAO_AULAS = {
-    "2ª Feira": 2, "3ª Feira": 1, "4ª Feira": 1,
-    "5ª Feira": 1, "6ª Feira": 1, "Sábado": 0,
-}
+# ⚠️ SEM PADRÃO — tudo zerado, o professor preenche
+PADRAO_AULAS = {dia: 0 for dia in DIAS_SEMANA}
 
 
 # ============================================================
@@ -112,7 +110,6 @@ def _file_id(f):
 def parse_distribuicao(arquivo_excel, ano):
     arquivo_excel.seek(0)
     df = pd.read_excel(arquivo_excel, header=None, dtype=object)
-
     etapas = {}
     etapa_num = 0
     etapa_ativa = None
@@ -121,8 +118,6 @@ def parse_distribuicao(arquivo_excel, ano):
         cells = [normalizar_texto(c) for c in row.tolist()]
         if not any(cells):
             continue
-
-        # marcador explícito de etapa
         etapa_explicita = None
         for c in cells:
             m = re.search(r"\b([123])\s*[ªº°]?\s*etapa\b", c, re.IGNORECASE)
@@ -131,25 +126,20 @@ def parse_distribuicao(arquivo_excel, ano):
                 break
         if etapa_explicita is not None:
             etapa_num = etapa_explicita
-
         if _eh_linha_total(cells):
             etapa_num += 1
             continue
-
         if etapa_ativa is None:
             if _eh_cabecalho(cells):
                 etapa_num = 1
             else:
                 continue
-
         etapa_ativa = f"{etapa_num}ª Etapa"
         etapas.setdefault(etapa_ativa, {d: [] for d in DIAS_SEMANA})
-
         if _eh_cabecalho(cells) and not any(
             nome_mes_para_numero(c) for c in cells
         ):
             continue
-
         if _eh_sabado(cells):
             for valor in row.iloc[2:]:
                 if valor is None or pd.isna(valor):
@@ -159,7 +149,6 @@ def parse_distribuicao(arquivo_excel, ano):
                 elif isinstance(valor, date):
                     etapas[etapa_ativa]["Sábado"].append(valor)
             continue
-
         mes_num = None
         for c in cells:
             mes = nome_mes_para_numero(c)
@@ -168,7 +157,6 @@ def parse_distribuicao(arquivo_excel, ano):
                 break
         if mes_num is None:
             continue
-
         for dia_semana, coluna in COLUNAS_DIAS.items():
             if coluna >= len(row):
                 continue
@@ -180,7 +168,6 @@ def parse_distribuicao(arquivo_excel, ano):
             etapas[etapa_ativa][dia_semana].extend(
                 datas_da_celula(valor, mes_num, ano)
             )
-
     for etapa in etapas:
         for dia in etapas[etapa]:
             etapas[etapa][dia] = sorted(set(etapas[etapa][dia]))
@@ -351,98 +338,138 @@ def conferir(etapas, etapa, aulas_por_dia, df_diario):
 st.title("📚 Conferência de Aulas")
 st.caption("CTPM Lavras • Conferência por dia letivo, etapa e quantidade de aulas")
 
+# ------------------------------------------------------------
+# SIDEBAR
+# ------------------------------------------------------------
 with st.sidebar:
     st.header("📂 1. Arquivos")
-    arquivo_dist = st.file_uploader("Distribuição de dias letivos (.xlsx)",
-                                    type=["xlsx", "xls"])
-    arquivo_diario = st.file_uploader("Diário escolar (.pdf)", type=["pdf"])
+    arquivo_dist = st.file_uploader(
+        "Distribuição de dias letivos (.xlsx)", type=["xlsx", "xls"])
+    arquivo_diario = st.file_uploader(
+        "Diário escolar (.pdf)", type=["pdf"])
     ano_letivo = st.number_input("Ano letivo", 2020, 2100, 2026, 1)
 
-if not arquivo_dist or not arquivo_diario:
-    st.info("👈 Envie os dois arquivos: distribuição de dias letivos e diário escolar.")
-    st.stop()
+arquivos_ok = arquivo_dist is not None and arquivo_diario is not None
 
-try:
-    etapas = parse_distribuicao(arquivo_dist, ano=int(ano_letivo))
-except Exception as e:
-    st.error(f"Erro ao ler a distribuição: {e}")
-    st.stop()
-if not etapas:
-    st.error("Não foi possível identificar as etapas na planilha.")
-    st.stop()
+if arquivos_ok:
+    try:
+        etapas = parse_distribuicao(arquivo_dist, ano=int(ano_letivo))
+    except Exception as e:
+        st.error(f"❌ Erro ao ler a distribuição: {e}")
+        st.stop()
+    if not etapas:
+        st.error("Não foi possível identificar etapas na planilha.")
+        st.stop()
 
-try:
-    df_diario, info_diario, quantidade_registros = parse_diario_pdf(
-        arquivo_diario, ano_padrao=int(ano_letivo))
-except Exception as e:
-    st.error(f"Erro ao ler o diário PDF: {e}")
-    st.stop()
+    try:
+        df_diario, info_diario, _ = parse_diario_pdf(
+            arquivo_diario, ano_padrao=int(ano_letivo))
+    except Exception as e:
+        st.error(f"❌ Erro ao ler o diário PDF: {e}")
+        st.stop()
 
-st.success(f"✅ Distribuição carregada: {len(etapas)} etapa(s)")
-st.success(f"✅ Diário processado: {len(df_diario)} data(s) identificada(s)")
+    st.success(f"✅ Distribuição carregada: {len(etapas)} etapa(s)")
+    st.success(f"✅ Diário processado: {len(df_diario)} data(s) identificada(s)")
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Ano", info_diario.get("ano") or int(ano_letivo))
-c2.metric("Etapa do diário", info_diario.get("etapa") or "Não identificada")
-c3.metric("Turma", info_diario.get("turma") or "Não identificada")
-c4.metric("Disciplina", info_diario.get("disciplina") or "Não identificada")
-if info_diario.get("professor"):
-    st.caption(f"👨‍🏫 Professor(a): **{info_diario['professor']}**")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Ano", info_diario.get("ano") or int(ano_letivo))
+    c2.metric("Etapa do diário", info_diario.get("etapa") or "Não identificada")
+    c3.metric("Turma", info_diario.get("turma") or "Não identificada")
+    c4.metric("Disciplina", info_diario.get("disciplina") or "Não identificada")
+    if info_diario.get("professor"):
+        st.caption(f"👨‍🏫 Professor(a): **{info_diario['professor']}**")
 
+    etapas_disponiveis = list(etapas.keys())
+    etapa_padrao = info_diario.get("etapa")
+    indice = (etapas_disponiveis.index(etapa_padrao)
+              if etapa_padrao in etapas_disponiveis else 0)
+    etapa = st.selectbox(
+        "**Etapa que será conferida**",
+        etapas_disponiveis, index=indice,
+    )
+else:
+    st.warning(
+        "👈 **Envie os dois arquivos na barra lateral esquerda** "
+        "(Distribuição de dias letivos + Diário escolar) para liberar "
+        "a conferência.\n\n"
+        "Enquanto isso, veja abaixo como vai ficar o menu de aulas "
+        "(modelo **Pasta1.xlsx**)."
+    )
+    etapas = {}
+    etapa = "—"
+    info_diario = {}
+    df_diario = pd.DataFrame(columns=["data", "aulas", "conteudo"])
+
+
+# ============================================================
+# 📝 MENU DE AULAS — preenchimento MANUAL (sem padrão)
+# ============================================================
 st.markdown("---")
-st.header("⚙️ 2. Configuração da conferência")
-
-etapas_disponiveis = list(etapas.keys())
-etapa_padrao = info_diario.get("etapa")
-indice = etapas_disponiveis.index(etapa_padrao) if etapa_padrao in etapas_disponiveis else 0
-etapa = st.selectbox("Etapa que será conferida", etapas_disponiveis, index=indice)
-
-# ============================================================
-# 📝 MENU DE AULAS POR DIA — modelo Pasta1.xlsx
-# ============================================================
 st.subheader("📝 Distribuição de aulas da disciplina")
-st.caption(
-    "Modelo da **Pasta1.xlsx**: informe quantas aulas desta disciplina "
-    "acontecem em cada dia da semana. "
-    "Os totais de dias vêm automaticamente da planilha de Distribuição."
+st.warning(
+    "⚠️ **Preencha o Nº de aulas no dia** para cada dia da semana. "
+    "Os valores começam em 0 e devem ser informados por você, pois "
+    "**cada disciplina tem uma carga horária diferente**."
 )
 
 fid = _file_id(arquivo_dist)
 
-# ---------- cabeçalho da tabela ----------
+# botão de limpar
+col_a, col_b, col_c = st.columns([1, 1, 3])
+if col_a.button("🔄 Limpar valores", use_container_width=True,
+                disabled=not arquivos_ok):
+    for dia in DIAS_SEMANA:
+        st.session_state[f"ni_{etapa}_{dia}_{fid}_{ano_letivo}"] = 0
+    st.rerun()
+
+# cabeçalho
 h0, h1, h2, h3 = st.columns([2, 2, 2, 2])
 h0.markdown("**Dias da semana**")
-h1.markdown("**Nº de aulas no dia**")
-h2.markdown("**Total de dias na etapa**")
+h1.markdown("**✏️ Nº de aulas no dia**")
+h2.markdown("**🔒 Total de dias na etapa**")
 h3.markdown("**Total de aulas**")
 
-# ---------- linhas ----------
 aulas_por_dia = {}
 total_dias_etapa = 0
 total_dias_com_aulas = 0
 total_aulas = 0
 
 for dia in DIAS_SEMANA:
-    qtd_dias = len(etapas[etapa].get(dia, []))
+    if arquivos_ok and etapa in etapas:
+        qtd_dias = len(etapas[etapa].get(dia, []))
+        desabilitado = False
+    else:
+        qtd_dias = 0
+        desabilitado = True
 
     c0, c1, c2, c3 = st.columns([2, 2, 2, 2])
     c0.markdown(f"**{dia}**")
+
+    chave_input = f"ni_{etapa}_{dia}_{fid}_{ano_letivo}"
+    if chave_input not in st.session_state:
+        st.session_state[chave_input] = 0  # começa zerado
 
     aulas = c1.number_input(
         label=f"aulas_{dia}",
         min_value=0,
         max_value=20,
-        value=int(PADRAO_AULAS[dia]),
         step=1,
-        key=f"ni_{etapa}_{dia}_{fid}_{ano_letivo}",
+        key=chave_input,
         label_visibility="collapsed",
+        disabled=desabilitado,
     )
 
     subtotal = aulas * qtd_dias
-    c2.markdown(f"<div style='padding-top:6px'>{qtd_dias}</div>",
-                unsafe_allow_html=True)
-    c3.markdown(f"<div style='padding-top:6px'><b>{subtotal}</b></div>",
-                unsafe_allow_html=True)
+    c2.markdown(
+        f"<div style='padding-top:6px'>"
+        f"{qtd_dias if arquivos_ok else '—'}</div>",
+        unsafe_allow_html=True,
+    )
+    c3.markdown(
+        f"<div style='padding-top:6px'><b>"
+        f"{subtotal if arquivos_ok else '—'}</b></div>",
+        unsafe_allow_html=True,
+    )
 
     aulas_por_dia[dia] = aulas
     total_dias_etapa += qtd_dias
@@ -450,17 +477,32 @@ for dia in DIAS_SEMANA:
         total_dias_com_aulas += qtd_dias
     total_aulas += subtotal
 
-# ---------- linha TOTAL ----------
+# linha TOTAL
 st.markdown("---")
 t0, t1, t2, t3 = st.columns([2, 2, 2, 2])
 t0.markdown("**TOTAL**")
 t1.markdown("")
-t2.markdown(f"**{total_dias_etapa}**")
-t3.markdown(f"**{total_aulas}**")
+t2.markdown(f"**{total_dias_etapa if arquivos_ok else '—'}**")
+t3.markdown(f"**{total_aulas if arquivos_ok else '—'}**")
 
-# ---------- resumo (Pasta1.xlsx layout) ----------
+# aviso se nada foi preenchido
+if arquivos_ok and total_aulas == 0:
+    st.error(
+        "🚫 **Nenhuma aula foi informada ainda.** "
+        "Preencha o Nº de aulas no dia para pelo menos um dia da semana "
+        "antes de rodar a conferência."
+    )
+
+# ------------------------------------------------------------
+# SE NÃO TEM ARQUIVOS → PARA AQUI
+# ------------------------------------------------------------
+if not arquivos_ok:
+    st.stop()
+
+# ============================================================
+# 📊 RESUMO DA ETAPA
+# ============================================================
 st.markdown("### 📊 Resumo da etapa")
-
 resumo_df = pd.DataFrame([
     {
         "Dias da semana": dia,
@@ -475,28 +517,15 @@ resumo_df = pd.DataFrame([
     "Total de dias da semana na etapa": total_dias_etapa,
     "Total de aulas": total_aulas,
 }])
-
 st.dataframe(resumo_df, use_container_width=True, hide_index=True)
 
-# ---------- métricas destacadas ----------
 m1, m2, m3 = st.columns(3)
-m1.metric(
-    "📅 Total de dias na etapa",
-    total_dias_etapa,
-    help="Todos os dias cadastrados na planilha (mesmo com 0 aulas).",
-)
-m2.metric(
-    "🎯 Dias com aulas programadas",
-    total_dias_com_aulas,
-    help="Só os dias em que você definiu Nº de aulas > 0.",
-)
-m3.metric(
-    "📚 Total de aulas da disciplina",
-    total_aulas,
-    help="Somatório de (Nº de aulas × total de dias de cada dia da semana).",
-)
+m1.metric("📅 Total de dias na etapa", total_dias_etapa,
+          help="Todos os dias cadastrados (mesmo com 0 aulas).")
+m2.metric("🎯 Dias com aulas programadas", total_dias_com_aulas,
+          help="Só os dias em que você definiu Nº de aulas > 0.")
+m3.metric("📚 Total de aulas da disciplina", total_aulas)
 
-# ---------- aviso explicativo sobre sábados ----------
 sabs = etapas[etapa].get("Sábado", [])
 if sabs:
     with st.expander(
@@ -509,12 +538,10 @@ if sabs:
         })
         st.dataframe(df_sab, use_container_width=True, hide_index=True)
         st.caption(
-            "ℹ️ Sábado é uma **data pontual** (não semanal), por isso aparece "
-            "com a data específica. Se quiser contá-lo, basta digitar um número "
-            "> 0 no campo **Nº de aulas no dia** da linha Sábado acima."
+            "ℹ️ Sábado é uma **data pontual**. Se quiser contá-lo, digite "
+            "um número > 0 na linha Sábado acima."
         )
 
-# ---------- lista completa de datas consideradas ----------
 with st.expander("📅 Ver todos os dias letivos considerados"):
     df_datas = montar_dias_esperados(etapas, etapa, aulas_por_dia)
     if df_datas.empty:
@@ -527,17 +554,26 @@ with st.expander("📅 Ver todos os dias letivos considerados"):
         st.dataframe(df_datas, use_container_width=True, hide_index=True)
 
 # ============================================================
-# CONFERÊNCIA
+# 🔎 CONFERÊNCIA
 # ============================================================
 st.markdown("---")
 st.header("🔎 3. Conferência")
 
-if st.button("▶️ RODAR CONFERÊNCIA", type="primary", use_container_width=True):
+botao_habilitado = arquivos_ok and total_aulas > 0
+
+if st.button(
+    "▶️ RODAR CONFERÊNCIA",
+    type="primary",
+    use_container_width=True,
+    disabled=not botao_habilitado,
+    help=("Preencha o Nº de aulas no dia antes de rodar."
+          if not botao_habilitado else "Clique para conferir."),
+):
     resultado = conferir(etapas, etapa, aulas_por_dia, df_diario)
     if resultado is None:
         st.warning("Não existem dias letivos configurados para essa etapa.")
-        st.stop()
-    st.session_state["ultimo_resultado"] = resultado
+    else:
+        st.session_state["ultimo_resultado"] = resultado
 
 resultado = st.session_state.get("ultimo_resultado")
 
