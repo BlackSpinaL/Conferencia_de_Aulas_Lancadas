@@ -18,12 +18,10 @@ MESES = {
     'Maio': 5, 'Junho': 6, 'Julho': 7, 'Agosto': 8,
     'Setembro': 9, 'Outubro': 10, 'Novembro': 11, 'Dezembro': 12
 }
-
 MESES_ABREV = {
     'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
     'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12
 }
-
 DIAS_SEMANA = ['2ª Feira', '3ª Feira', '4ª Feira', '5ª Feira', '6ª Feira', 'Sábado']
 
 
@@ -37,17 +35,14 @@ def _extrair_datas_celula(valor, mes_num=None, ano=2026):
         return [valor.date()]
     if isinstance(valor, date):
         return [valor]
-
     texto = str(valor).strip()
     if not texto or texto.upper() in ('NAN', 'NONE', 'NAT'):
         return []
-
     if re.match(r'^\d{4}-\d{2}-\d{2}', texto):
         try:
             return [datetime.strptime(texto[:10], '%Y-%m-%d').date()]
         except ValueError:
             pass
-
     m = re.match(r'^(\d{1,2})[/\.\-](\d{1,2})[/\.\-](\d{2,4})', texto)
     if m:
         dia, mes, ano_str = int(m.group(1)), int(m.group(2)), m.group(3)
@@ -56,7 +51,6 @@ def _extrair_datas_celula(valor, mes_num=None, ano=2026):
             return [date(ano_conv, mes, dia)]
         except ValueError:
             return []
-
     m = re.match(r'^(\d{1,2})\s*[/\-\.]\s*([a-zA-ZçÇ]{3})', texto)
     if m:
         dia = int(m.group(1))
@@ -66,7 +60,6 @@ def _extrair_datas_celula(valor, mes_num=None, ano=2026):
                 return [date(ano, MESES_ABREV[mes_ab], dia)]
             except ValueError:
                 return []
-
     if mes_num is None:
         return []
     numeros = re.findall(r'\d+', texto)
@@ -282,20 +275,7 @@ def conferir(etapas, etapa, aulas_por_dia, df_diario):
     divergentes = merged[(merged['_merge'] == 'both') &
                          (merged['aulas_esperadas'] != merged['aulas'])].copy()
 
-    pasta1 = []
-    for dia_sem in DIAS_SEMANA:
-        total_dias = len(etapas[etapa][dia_sem])
-        qtd = int(aulas_por_dia.get(dia_sem, 0))
-        pasta1.append({
-            'Dias da semana': dia_sem,
-            'Nº de aulas no dia': qtd,
-            'Total de dias da semana na etapa': total_dias,
-            'Total de aulas': total_dias * qtd
-        })
-    df_pasta1 = pd.DataFrame(pasta1)
-
     return {
-        'df_pasta1': df_pasta1,
         'total_esperado': total_esperado,
         'total_lancado': total_lancado,
         'faltantes': faltantes.sort_values('data'),
@@ -308,7 +288,7 @@ def conferir(etapas, etapa, aulas_por_dia, df_diario):
 # INTERFACE
 # ============================================================
 st.title("📚 Sistema de Conferência de Aulas — CTPM Lavras")
-st.caption("Faça o upload dos arquivos, preencha a tabela de aulas e clique em RODAR.")
+st.caption("Faça o upload dos arquivos, preencha a tabela e clique em RODAR.")
 
 with st.sidebar:
     st.header("📂 Arquivos")
@@ -317,7 +297,7 @@ with st.sidebar:
     ano_letivo = st.number_input("Ano letivo", min_value=2020, max_value=2100, value=2026, step=1)
 
 if not arquivo_dist or not arquivo_diario:
-    st.info("⬅️ Faça o upload dos dois arquivos (planilha + diário) na barra lateral para começar.")
+    st.info("⬅️ Faça o upload dos dois arquivos na barra lateral para começar.")
     st.stop()
 
 # --- Planilha ---
@@ -342,7 +322,7 @@ except Exception as e:
     st.error(f"Erro ao ler o diário: {e}")
     st.stop()
 
-st.success(f"✔ Planilha carregada — etapas encontradas: {', '.join(etapas.keys())}")
+st.success(f"✔ Planilha carregada — etapas: {', '.join(etapas.keys())}")
 st.success(f"✔ Diário lido — **{len(df_diario)} lançamento(s)** encontrado(s)")
 
 with st.expander("🔬 Diagnóstico do parser do diário"):
@@ -354,83 +334,118 @@ with st.expander("🔬 Diagnóstico do parser do diário"):
         df_dbg['data'] = pd.to_datetime(df_dbg['data']).dt.strftime('%d/%m/%Y')
         st.dataframe(df_dbg, use_container_width=True, hide_index=True)
 
-# --- Seleção de etapa ---
+# --- Etapa ---
 etapa = st.selectbox("📌 Etapa", list(etapas.keys()))
 
 # ============================================================
 # TABELA EDITÁVEL ESTILO "PASTA1"
 # ============================================================
-st.subheader("⚙️ Distribuição de aulas — estilo Pasta1")
+st.markdown("---")
+st.subheader("📋 Distribuição de aulas — preencha a coluna 'Nº de aulas no dia'")
 st.caption(
-    "Edite **apenas** a coluna **'Nº de aulas no dia'**. As colunas "
-    "**'Total de dias da semana na etapa'** e **'Total de aulas'** são "
-    "calculadas automaticamente a partir da etapa selecionada acima."
+    "**Coluna editável:** 'Nº de aulas no dia' (varia por matéria/turma). "
+    "**Colunas automáticas:** 'Total de dias da semana na etapa' (vem da planilha) "
+    "e 'Total de aulas' (calculado como Nº × Dias)."
 )
 
-# Valores padrão (usados na primeira renderização)
-default_aulas = {'2ª Feira': 2, '3ª Feira': 1, '4ª Feira': 1,
-                 '5ª Feira': 1, '6ª Feira': 1, 'Sábado': 0}
+# Valores padrão (aparecem na 1ª vez)
+default_aulas = {
+    '2ª Feira': 2, '3ª Feira': 1, '4ª Feira': 1,
+    '5ª Feira': 1, '6ª Feira': 1, 'Sábado': 0
+}
 
-# Monta o DataFrame inicial
-linhas = []
+# Monta o DataFrame base
+base_rows = []
 for dia_sem in DIAS_SEMANA:
-    total_dias = len(etapas[etapa][dia_sem])
-    n = default_aulas[dia_sem]
-    linhas.append({
+    base_rows.append({
         'Dias da semana': dia_sem,
-        'Nº de aulas no dia': n,
-        'Total de dias da semana na etapa': total_dias,
-        'Total de aulas': total_dias * n,
+        'Nº de aulas no dia': default_aulas[dia_sem],
+        'Total de dias da semana na etapa': len(etapas[etapa][dia_sem]),
+        'Total de aulas': 0,  # será recalculado
     })
+df_base = pd.DataFrame(base_rows)
+df_base['Total de aulas'] = (
+    df_base['Nº de aulas no dia'] * df_base['Total de dias da semana na etapa']
+)
 
-df_edit_input = pd.DataFrame(linhas)
+# Chave única por etapa+ano para preservar edições
+editor_key = f"editor_{etapa}_{ano_letivo}"
 
-# Editor
-edited = st.data_editor(
-    df_edit_input,
+# Estado inicial (na primeira vez que abre)
+if editor_key not in st.session_state:
+    st.session_state[editor_key] = df_base.copy()
+
+# Se mudou a etapa, recria o estado com os valores padrão
+if st.session_state.get(f"{editor_key}_etapa_ant") != etapa:
+    st.session_state[editor_key] = df_base.copy()
+    st.session_state[f"{editor_key}_etapa_ant"] = etapa
+
+# Data editor
+edited_df = st.data_editor(
+    st.session_state[editor_key],
     column_config={
         'Dias da semana': st.column_config.TextColumn(
             'Dias da semana', disabled=True, width='medium'
         ),
         'Nº de aulas no dia': st.column_config.NumberColumn(
-            'Nº de aulas no dia', min_value=0, max_value=20, step=1, width='small'
+            'Nº de aulas no dia', min_value=0, max_value=20, step=1, width='small',
+            help='✏️ Editável — digite o número de aulas para esse dia da semana'
         ),
         'Total de dias da semana na etapa': st.column_config.NumberColumn(
-            'Total de dias da semana na etapa', disabled=True, width='medium'
+            'Total de dias da semana na etapa', disabled=True, width='large',
+            help='🔒 Automático — vem da planilha de distribuição'
         ),
         'Total de aulas': st.column_config.NumberColumn(
-            'Total de aulas', disabled=True, width='small'
+            'Total de aulas', disabled=True, width='small',
+            help='🔒 Automático — Nº de aulas × Total de dias'
         ),
     },
     hide_index=True,
     use_container_width=True,
-    key=f'editor_aulas_{etapa}_{ano_letivo}',
+    key=editor_key,
+    num_rows='fixed',
 )
 
-# Recalcula o total a partir dos valores atuais do editor
-df_edit_input['Nº de aulas no dia'] = edited['Nº de aulas no dia'].fillna(0).astype(int)
-df_edit_input['Total de aulas'] = (
-    df_edit_input['Nº de aulas no dia'] * df_edit_input['Total de dias da semana na etapa']
+# Recalcula a coluna "Total de aulas"
+edited_df['Total de aulas'] = (
+    edited_df['Nº de aulas no dia'].fillna(0).astype(int) *
+    edited_df['Total de dias da semana na etapa'].fillna(0).astype(int)
 )
 
-total_geral = int(df_edit_input['Total de aulas'].sum())
+# Salva o estado atualizado
+st.session_state[editor_key] = edited_df
 
-# Mostra o resumo com totais atualizados
-st.markdown("**Resumo (atualizado a cada edição):**")
-st.dataframe(df_edit_input, hide_index=True, use_container_width=True)
+# Total geral
+total_dias = int(edited_df['Total de dias da semana na etapa'].sum())
+total_aulas = int(edited_df['Total de aulas'].sum())
+
+# Linha de total
+df_total = pd.DataFrame([{
+    'Dias da semana': 'TOTAL',
+    'Nº de aulas no dia': '',
+    'Total de dias da semana na etapa': total_dias,
+    'Total de aulas': total_aulas,
+}])
+df_show = pd.concat([edited_df, df_total], ignore_index=True)
+
+st.markdown("### 📊 Tabela final (igual à Pasta1)")
+st.dataframe(df_show, use_container_width=True, hide_index=True)
 
 st.markdown(
-    f"<h3 style='text-align:center; color:#1f77b4;'>Total de aulas na {etapa}: "
-    f"<b>{total_geral}</b></h3>",
+    f"<h3 style='text-align:center; color:#1f77b4;'>"
+    f"Total de aulas previstas na {etapa}: <b>{total_aulas}</b>"
+    f"</h3>",
     unsafe_allow_html=True
 )
-
-# Aulas por dia (dict) para a conferência
-aulas_por_dia = dict(zip(df_edit_input['Dias da semana'], df_edit_input['Nº de aulas no dia']))
 
 # ============================================================
 # BOTÃO RODAR
 # ============================================================
+st.markdown("---")
+
+# Monta dict aulas_por_dia a partir da tabela
+aulas_por_dia = dict(zip(edited_df['Dias da semana'], edited_df['Nº de aulas no dia'].astype(int)))
+
 if st.button("▶️ RODAR CONFERÊNCIA", type="primary", use_container_width=True):
     resultado = conferir(etapas, etapa, aulas_por_dia, df_diario)
     if resultado is None:
@@ -438,10 +453,8 @@ if st.button("▶️ RODAR CONFERÊNCIA", type="primary", use_container_width=Tr
         st.stop()
 
     st.markdown("---")
-    st.subheader("📊 Tabela de referência")
-    st.dataframe(resultado['df_pasta1'], use_container_width=True, hide_index=True)
+    st.subheader("📊 Resultado da conferência")
 
-    st.markdown("---")
     c1, c2, c3 = st.columns(3)
     c1.metric("Total esperado", resultado['total_esperado'])
     c2.metric("Total lançado", resultado['total_lancado'])
@@ -457,6 +470,10 @@ if st.button("▶️ RODAR CONFERÊNCIA", type="primary", use_container_width=Tr
         st.warning(f"{len(resultado['faltantes'])} dia(s) sem lançamento:")
         df_f = resultado['faltantes'].copy()
         df_f['data'] = pd.to_datetime(df_f['data']).dt.strftime('%d/%m/%Y')
+        df_f = df_f.rename(columns={
+            'data': 'Data', 'dia_semana': 'Dia da semana',
+            'aulas_esperadas': 'Aulas esperadas'
+        })
         st.dataframe(df_f, use_container_width=True, hide_index=True)
 
     st.markdown("---")
@@ -466,6 +483,9 @@ if st.button("▶️ RODAR CONFERÊNCIA", type="primary", use_container_width=Tr
     else:
         df_e = resultado['extras'].copy()
         df_e['data'] = pd.to_datetime(df_e['data']).dt.strftime('%d/%m/%Y')
+        df_e = df_e.rename(columns={
+            'data': 'Data', 'aulas': 'Aulas lançadas', 'conteudo': 'Conteúdo'
+        })
         st.dataframe(df_e, use_container_width=True, hide_index=True)
 
     st.markdown("---")
